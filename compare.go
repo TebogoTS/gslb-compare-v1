@@ -28,17 +28,23 @@ type FoundRow struct {
 	Host         string
 	Ingress      string   // RKE1 ingress name
 	RKE2Clusters []string // every RKE2 cluster the host was found on (sorted, deduped)
-	Flag         string   // "differs" when none of the RKE2 hits has the same namespace/gslb/ingress
+	Designated   []string // where the migration plan (clusterMap) says this RKE1 cluster's apps should land
+	// Flag: "differs" when none of the RKE2 hits has the same namespace/gslb/ingress;
+	// "elsewhere" when it was found only on clusters outside Designated; both joined by ";".
+	Flag string
 }
 
 // MissingRow is an RKE1 host not found on any RKE2 cluster.
 type MissingRow struct {
-	Cluster    string
-	Namespace  string
-	Gslb       string
-	Host       string
-	Ingress    string
-	LikelyRKE2 []string // RKE2 clusters whose clusterpool/legacy-cluster hint points at Cluster, if any
+	Cluster   string
+	Namespace string
+	Gslb      string
+	Host      string
+	Ingress   string
+	// LikelyRKE2: the clusterMap designation for this RKE1 cluster (its own env + dc). Falls
+	// back to RKE2 clusters whose clusterpool/legacy-cluster hint points at it when the base
+	// isn't in clusterMap. Empty only when neither knows -- never guessed.
+	LikelyRKE2 []string
 }
 
 type SimpleReport struct {
@@ -134,6 +140,13 @@ func buildSimpleReport(cfg *Config, snap *Snapshot, env string) *SimpleReport {
 		if !ok || !inEnv(slot, env) {
 			continue
 		}
+		// The plan's designation for this exact RKE1 cluster (its own env + dc), e.g.
+		// cib-corp-nonprod-270 -> subnp270-cap-4. Computed once per cluster, not per host.
+		designated := designatedTargets(cfg, base, slot)
+		likely := designated
+		if len(likely) == 0 {
+			likely = likelyTargets(cfg, snap, base, env) // annotation fallback for bases not in clusterMap
+		}
 		for _, g := range c.Gslbs {
 			for _, h := range g.Hosts {
 				inv := InventoryRow{Cluster: c.Name, Namespace: g.Namespace, Gslb: g.Name, Host: h.Host, Ingress: h.Ingress}
@@ -143,24 +156,32 @@ func buildSimpleReport(cfg *Config, snap *Snapshot, env string) *SimpleReport {
 				if len(hits) == 0 {
 					rep.Missing = append(rep.Missing, MissingRow{
 						Cluster: inv.Cluster, Namespace: inv.Namespace, Gslb: inv.Gslb, Host: inv.Host, Ingress: inv.Ingress,
-						LikelyRKE2: likelyTargets(cfg, snap, base, env),
+						LikelyRKE2: likely,
 					})
 					continue
 				}
 				found := FoundRow{
 					Cluster: inv.Cluster, Namespace: inv.Namespace, Gslb: inv.Gslb, Host: inv.Host, Ingress: inv.Ingress,
-					Flag: "differs",
+					Designated: designated,
 				}
-				exact := false
+				exact, onDesignated := false, false
 				for _, hit := range hits {
 					found.RKE2Clusters = append(found.RKE2Clusters, hit.Cluster)
 					if strings.EqualFold(hit.Namespace, inv.Namespace) && strings.EqualFold(hit.Gslb, inv.Gslb) && strings.EqualFold(hit.Ingress, inv.Ingress) {
 						exact = true
 					}
+					if contains(designated, hit.Cluster) {
+						onDesignated = true
+					}
 				}
-				if exact {
-					found.Flag = ""
+				var flags []string
+				if !exact {
+					flags = append(flags, "differs")
 				}
+				if len(designated) > 0 && !onDesignated {
+					flags = append(flags, "elsewhere")
+				}
+				found.Flag = strings.Join(flags, ";")
 				found.RKE2Clusters = dedupeSorted(found.RKE2Clusters)
 				rep.Found = append(rep.Found, found)
 			}
@@ -173,8 +194,63 @@ func buildSimpleReport(cfg *Config, snap *Snapshot, env string) *SimpleReport {
 	return rep
 }
 
+// designatedTargets expands cfg.Naming.ClusterMap[base]'s patterns against this specific RKE1
+// cluster's own env/dc (from slot, "env/dc"), e.g. base "cib-corp", slot "nonprod/270",
+// pattern "sub{env}{dc}-cap-4" -> "subnp270-cap-4". This is the authoritative migration
+// plan, straight from a human-maintained table -- it does not depend on whether Rancher's
+// clusterpool/legacy-cluster annotation has been applied yet, or on any naming heuristic.
+// Returns nil when base isn't in the map, so callers know to fall back to likelyTargets.
+func designatedTargets(cfg *Config, base, slot string) []string {
+	patterns := cfg.Naming.ClusterMap[strings.ToLower(base)]
+	if len(patterns) == 0 {
+		return nil
+	}
+	parts := strings.SplitN(slot, "/", 2)
+	if len(parts) != 2 {
+		return nil
+	}
+	env, dc := parts[0], parts[1]
+	if tok, ok := cfg.Naming.EnvTokens[env]; ok {
+		env = tok
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, p := range patterns {
+		name := expandPattern(p, env, dc)
+		if !seen[name] {
+			seen[name] = true
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// expandPattern substitutes env/dc placeholders. Both {curly} and <angle> forms are
+// accepted (the plan uses "sub<EV><DC>-cap-1" in one table and "ssm{env}{dc}-cap-0" in
+// another); config normalisation already lower-cases patterns, so only lower-case tokens
+// need handling here. A pattern with no placeholders is returned unchanged (a literal,
+// slot-specific name), which is only correct if that RKE1 base has exactly one slot.
+func expandPattern(pattern, env, dc string) string {
+	r := strings.NewReplacer(
+		"{env}", env, "{ev}", env, "{dc}", dc,
+		"<env>", env, "<ev>", env, "<dc>", dc,
+	)
+	return r.Replace(pattern)
+}
+
+func contains(ss []string, s string) bool {
+	for _, v := range ss {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
 // likelyTargets returns the in-scope RKE2 clusters whose legacy-cluster annotation points
-// at base, sorted. Empty when nothing is annotated for it yet -- never guessed.
+// at base, sorted. Fallback for bases with no clusterMap entry; empty when nothing is
+// annotated for it either -- never guessed.
 func likelyTargets(cfg *Config, snap *Snapshot, base, env string) []string {
 	var out []string
 	for i := range snap.Clusters {

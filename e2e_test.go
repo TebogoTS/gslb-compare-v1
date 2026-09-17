@@ -245,6 +245,105 @@ func TestCollectedAtSummary(t *testing.T) {
 	}
 }
 
+// TestDesignatedTargets pins down pattern expansion against the exact syntax the real
+// migration plan uses: "sub<EV><DC>-cap-N" (angle brackets, upper-case) in one table and
+// "ssm{env}{dc}-cap-N" (curly braces, lower-case) in another -- both must resolve, since
+// config normalisation lower-cases patterns on load either way.
+func TestDesignatedTargets(t *testing.T) {
+	cfg, err := loadConfig(writeTempConfig(t, `{"endpoints":[], "naming": {"clusterMap": {
+		"cib-corp":       ["sub<EV><DC>-cap-4"],
+		"cib-africatech": ["sub{env}{dc}-cap-2", "ado{env}{dc}-cap-1"],
+		"cto-cloud":      ["ssm{env}{dc}-cap-0"],
+		"subatomic":      ["fixed-literal-cluster"]
+	}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		base, slot string
+		want       []string
+	}{
+		{"cib-corp", "nonprod/270", []string{"subnp270-cap-4"}},
+		{"cib-corp", "nonprod/sdc", []string{"subnpsdc-cap-4"}},
+		{"cib-corp", "prod/sdc", []string{"subpdsdc-cap-4"}},
+		{"cib-africatech", "nonprod/270", []string{"adonp270-cap-1", "subnp270-cap-2"}},
+		{"cto-cloud", "nonprod/sdc", []string{"ssmnpsdc-cap-0"}},
+		{"subatomic", "nonprod/270", []string{"fixed-literal-cluster"}}, // no placeholders -> unchanged
+		{"no-such-base", "nonprod/270", nil},
+	}
+	for _, c := range cases {
+		got := designatedTargets(cfg, c.base, c.slot)
+		if !slicesEqual(got, c.want) {
+			t.Errorf("designatedTargets(%q, %q) = %v, want %v", c.base, c.slot, got, c.want)
+		}
+	}
+}
+
+func slicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// TestSimpleReportUsesClusterMapWithoutAnyAnnotation is the actual reported scenario: a
+// migration plan (clusterMap) is configured, but Rancher's clusterpool/legacy-cluster
+// annotation is completely absent (empty LegacyHint on every target cluster) -- either
+// because it was never set or the snapshot predates it. likely_rke2_cluster and Designated
+// must still resolve entirely from the plan; the annotation path must not be required.
+func TestSimpleReportUsesClusterMapWithoutAnyAnnotation(t *testing.T) {
+	legacy := &fakeRancher{
+		clusters: []map[string]any{cl("c-1", "cib-corp-nonprod-270")},
+		objs: map[string][]map[string]any{
+			"c-1" + gp: {gslbEmbedded("shop", "web", "web.np.absa.africa", "roundRobin")},
+			"c-1" + ip: {ing("shop", "web", "web.np.absa.africa", "web", 8080, owner("web"))},
+		},
+	}
+	// No fleet-cluster annotation objects at all: the "local/apis/fleet.cattle.io/..." key
+	// is simply absent, so fetchLegacyHints finds nothing and LegacyHint stays "" everywhere.
+	target := &fakeRancher{
+		clusters: []map[string]any{cl("c-m-1", "subnp270-cap-4")},
+		objs: map[string][]map[string]any{
+			"c-m-1" + gp: {},
+			"c-m-1" + ip: {},
+		},
+	}
+	servers := []*httptest.Server{httptest.NewServer(legacy), httptest.NewServer(target)}
+	for _, s := range servers {
+		defer s.Close()
+	}
+	t.Setenv("TOK", "tok")
+	cfgJSON := `{"endpoints":[
+	  {"name":"rke1","role":"legacy","url":"` + servers[0].URL + `","tokenEnv":"TOK"},
+	  {"name":"rke2","role":"target","url":"` + servers[1].URL + `","tokenEnv":"TOK"}],
+	  "naming": {"clusterMap": {"cib-corp": ["sub{env}{dc}-cap-4"]}}}`
+	cfg, err := loadConfig(writeTempConfig(t, cfgJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err := runCollect(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range snap.Clusters {
+		if c.Role == "target" && c.LegacyHint != "" {
+			t.Fatalf("test setup: expected no legacy hint on the target cluster, got %q", c.LegacyHint)
+		}
+	}
+	rep := buildSimpleReport(cfg, snap, "nonprod")
+	if len(rep.Missing) != 1 {
+		t.Fatalf("missing rows: %+v", rep.Missing)
+	}
+	if got := rep.Missing[0].LikelyRKE2; !slicesEqual(got, []string{"subnp270-cap-4"}) {
+		t.Errorf("likely_rke2_cluster = %v, want [subnp270-cap-4] -- resolved from clusterMap with zero annotations present", got)
+	}
+}
+
 func TestHintMatchesBase(t *testing.T) {
 	cfg, err := loadConfig(writeTempConfig(t, `{"endpoints":[]}`))
 	if err != nil {
