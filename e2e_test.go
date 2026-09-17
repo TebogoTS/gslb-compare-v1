@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 type fakeRancher struct {
@@ -223,6 +224,24 @@ func TestSimpleReportEndToEnd(t *testing.T) {
 	if m := missing[0]; m["host"] != "batch.np.absa.africa" || m["cluster"] != "cib-corp-nonprod-sdc" ||
 		m["ingress"] != "batch" || m["likely_rke2_cluster"] != "adonp270-cap-1" {
 		t.Errorf("missing batch row: %v", m)
+	}
+}
+
+// TestCollectedAtSummary pins down the staleness warning that surfaces on every report,
+// added after a real incident: report is offline/snapshot-based, so an annotation rollout
+// completed in Rancher after the last collect silently didn't show up in likely_rke2_cluster,
+// with nothing in the output hinting that the data might be old.
+func TestCollectedAtSummary(t *testing.T) {
+	fresh := time.Now().Add(-5 * time.Minute).UTC().Format(time.RFC3339)
+	if s := collectedAtSummary(fresh); strings.Contains(s, "STALE") {
+		t.Errorf("a 5-minute-old snapshot must not be flagged stale: %s", s)
+	}
+	old := time.Now().Add(-48 * time.Hour).UTC().Format(time.RFC3339)
+	if s := collectedAtSummary(old); !strings.Contains(s, "STALE") {
+		t.Errorf("a 48-hour-old snapshot must be flagged stale: %s", s)
+	}
+	if s := collectedAtSummary(""); s != "unknown" {
+		t.Errorf("empty CollectedAt should report unknown, got %q", s)
 	}
 }
 

@@ -42,7 +42,9 @@ type MissingRow struct {
 }
 
 type SimpleReport struct {
-	Env       string // "nonprod", "prod", or "" for no env filter -- both DCs are always included
+	Env         string // "nonprod", "prod", or "" for no env filter -- both DCs are always included
+	CollectedAt string // snap.CollectedAt, verbatim -- report is offline/snapshot-based, so this is
+	// the only way to tell whether it reflects Rancher's current state or a stale collect.
 	Inventory []InventoryRow
 	Found     []FoundRow
 	Missing   []MissingRow
@@ -93,7 +95,7 @@ func hintMatchesBase(cfg *Config, hint, base string) bool {
 // buildSimpleReport walks the snapshot once and produces the three flat lists. env scopes
 // both sides ("nonprod" keeps nonprod/270 + nonprod/sdc, "" keeps everything).
 func buildSimpleReport(cfg *Config, snap *Snapshot, env string) *SimpleReport {
-	rep := &SimpleReport{Env: env}
+	rep := &SimpleReport{Env: env, CollectedAt: snap.CollectedAt}
 
 	// Index every RKE2 host, across every target cluster in scope, regardless of pool/DC.
 	targetHosts := map[string][]targetHit{}
