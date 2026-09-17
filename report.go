@@ -125,18 +125,21 @@ func writeMarkdown(w io.Writer, rep *SimpleReport) error {
 	}
 
 	p("\n## 2. Found in RKE2\n\n")
-	p("RKE1 hosts confirmed to also exist on RKE2, and where. `flag` = \"differs\" when none of the\n")
-	p("RKE2 matches has the same namespace/GSLB/ingress name as RKE1.\n\n")
-	p("| Cluster | Namespace | GSLB | Host | Ingress | Found on (RKE2) | Flag |\n|---|---|---|---|---|---|---|\n")
+	p("RKE1 hosts confirmed to also exist on RKE2, and where. `Designated` is where `naming.clusterMap`\n")
+	p("says this RKE1 cluster's apps belong (blank when that base isn't in the map). `flag` is\n")
+	p("`differs` when none of the RKE2 matches has the same namespace/GSLB/ingress name as RKE1,\n")
+	p("and/or `elsewhere` when it was found only on clusters other than Designated.\n\n")
+	p("| Cluster | Namespace | GSLB | Host | Ingress | Found on (RKE2) | Designated | Flag |\n|---|---|---|---|---|---|---|---|\n")
 	for _, r := range rep.Found {
-		p("| %s | %s | %s | %s | %s | %s | %s |\n", md(r.Cluster), md(r.Namespace), md(r.Gslb), md(r.Host),
-			md(orDash(r.Ingress)), md(joinOrDash(r.RKE2Clusters)), orDash(r.Flag))
+		p("| %s | %s | %s | %s | %s | %s | %s | %s |\n", md(r.Cluster), md(r.Namespace), md(r.Gslb), md(r.Host),
+			md(orDash(r.Ingress)), md(joinOrDash(r.RKE2Clusters)), md(joinOrDash(r.Designated)), orDash(r.Flag))
 	}
 
 	p("\n## 3. Missing in RKE2\n\n")
-	p("RKE1 hosts not found on any (nonprod) RKE2 cluster. `Likely RKE2 cluster` is filled in only\n")
-	p("when the cluster's `clusterpool/legacy-cluster` Rancher annotation already points back at this\n")
-	p("RKE1 cluster — left blank otherwise, never guessed.\n\n")
+	p("RKE1 hosts not found on any (nonprod) RKE2 cluster. `Likely RKE2 cluster` comes from\n")
+	p("`naming.clusterMap` (the migration plan) when this RKE1 cluster's base is in it; otherwise\n")
+	p("from any RKE2 cluster whose `clusterpool/legacy-cluster` annotation already points back at\n")
+	p("it — left blank when neither knows, never guessed.\n\n")
 	p("| Cluster | Namespace | GSLB | Host | Ingress | Likely RKE2 cluster |\n|---|---|---|---|---|---|\n")
 	for _, r := range rep.Missing {
 		p("| %s | %s | %s | %s | %s | %s |\n", md(r.Cluster), md(r.Namespace), md(r.Gslb), md(r.Host),
@@ -162,11 +165,12 @@ func writeInventoryCSV(w io.Writer, rep *SimpleReport) error {
 func writeFoundCSV(w io.Writer, rep *SimpleReport) error {
 	cw := csv.NewWriter(w)
 	defer cw.Flush()
-	if err := cw.Write([]string{"cluster", "namespace", "gslb", "host", "ingress", "found_on_rke2", "flag"}); err != nil {
+	if err := cw.Write([]string{"cluster", "namespace", "gslb", "host", "ingress", "found_on_rke2", "designated", "flag"}); err != nil {
 		return err
 	}
 	for _, r := range rep.Found {
-		if err := cw.Write([]string{r.Cluster, r.Namespace, r.Gslb, r.Host, r.Ingress, strings.Join(r.RKE2Clusters, ";"), r.Flag}); err != nil {
+		if err := cw.Write([]string{r.Cluster, r.Namespace, r.Gslb, r.Host, r.Ingress,
+			strings.Join(r.RKE2Clusters, ";"), strings.Join(r.Designated, ";"), r.Flag}); err != nil {
 			return err
 		}
 	}

@@ -32,8 +32,19 @@ type Naming struct {
 	SlotOverrides map[string]string `json:"slotOverrides"`
 	// Escape hatch: clusterpool/legacy-cluster annotation value -> RKE1 base name, for
 	// renames with no textual relationship to the RKE1 name (e.g. "bolt" -> "avaf").
-	// hintMatchesBase checks this before falling back to its suffix heuristic.
+	// hintMatchesBase checks this before falling back to its suffix heuristic. Only
+	// consulted as a fallback for RKE1 bases with no ClusterMap entry.
 	LegacyAliases map[string]string `json:"legacyAliases"`
+	// ClusterMap is the authoritative RKE1 -> RKE2 mapping, straight from the migration
+	// plan: RKE1 base name -> RKE2 cluster name pattern(s). Patterns take {env} and {dc}
+	// placeholders (also accepted: <ev>, <env>, <dc>, any case), expanded per RKE1 cluster
+	// via EnvTokens and the cluster's own dc, e.g. cib-corp-nonprod-270 with
+	// "sub{env}{dc}-cap-4" -> subnp270-cap-4. Takes precedence over LegacyAliases/the
+	// clusterpool/legacy-cluster annotation, which are only a fallback for bases not here.
+	ClusterMap map[string][]string `json:"clusterMap"`
+	// EnvTokens maps a normalised env to the token used in RKE2 cluster names, for {env}
+	// expansion. Merged over the defaults (nonprod -> np, prod -> pd).
+	EnvTokens map[string]string `json:"envTokens"`
 }
 
 type HostRewrite struct {
@@ -55,6 +66,8 @@ type Config struct {
 	legacyRe, targetRe *regexp.Regexp
 	endpointSlot       map[string]string // endpoint name -> normalised Endpoint.Slot
 }
+
+var defaultEnvTokens = map[string]string{"nonprod": "np", "prod": "pd"}
 
 var defaultEnvAliases = map[string]string{
 	"nonprod": "nonprod", "non-prod": "nonprod", "np": "nonprod", "dev": "nonprod",
@@ -97,6 +110,23 @@ func loadConfig(path string) (*Config, error) {
 		legacyAliases[strings.ToLower(k)] = strings.ToLower(v)
 	}
 	c.Naming.LegacyAliases = legacyAliases
+	envTokens := map[string]string{}
+	for k, v := range defaultEnvTokens {
+		envTokens[k] = v
+	}
+	for k, v := range c.Naming.EnvTokens {
+		envTokens[strings.ToLower(k)] = strings.ToLower(v)
+	}
+	c.Naming.EnvTokens = envTokens
+	clusterMap := map[string][]string{}
+	for base, patterns := range c.Naming.ClusterMap {
+		for _, p := range patterns {
+			if p = strings.TrimSpace(p); p != "" {
+				clusterMap[strings.ToLower(base)] = append(clusterMap[strings.ToLower(base)], strings.ToLower(p))
+			}
+		}
+	}
+	c.Naming.ClusterMap = clusterMap
 	if c.LegacyAnnotation == "" {
 		c.LegacyAnnotation = "clusterpool/legacy-cluster"
 	}
