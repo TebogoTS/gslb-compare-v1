@@ -7,7 +7,30 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
+
+// staleAfter is how old a snapshot can be before report/printSimpleSummary calls it out.
+// report is deliberately offline (reads only the snapshot), so this is the only signal that
+// what you're looking at might not reflect Rancher's current state -- e.g. an annotation
+// rollout finished after the last collect won't show up until you collect again.
+const staleAfter = 24 * time.Hour
+
+func collectedAtSummary(collectedAt string) string {
+	if collectedAt == "" {
+		return "unknown"
+	}
+	t, err := time.Parse(time.RFC3339, collectedAt)
+	if err != nil {
+		return collectedAt
+	}
+	age := time.Since(t)
+	s := t.Local().Format("2006-01-02 15:04 MST") + fmt.Sprintf(" (%s ago)", age.Round(time.Minute))
+	if age > staleAfter {
+		s += " -- STALE: re-run collect before trusting this"
+	}
+	return s
+}
 
 func writeSimpleReports(rep *SimpleReport, dir string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -43,7 +66,8 @@ func printSimpleSummary(w io.Writer, rep *SimpleReport) {
 	if env == "" {
 		env = "(all)"
 	}
-	fmt.Fprintf(w, "\nenv=%s  rke1_hosts=%d  found_in_rke2=%d  missing_in_rke2=%d\n",
+	fmt.Fprintf(w, "\nsnapshot collected: %s\n", collectedAtSummary(rep.CollectedAt))
+	fmt.Fprintf(w, "env=%s  rke1_hosts=%d  found_in_rke2=%d  missing_in_rke2=%d\n",
 		env, len(rep.Inventory), len(rep.Found), len(rep.Missing))
 	flagged := 0
 	for _, r := range rep.Found {
@@ -89,6 +113,8 @@ func writeMarkdown(w io.Writer, rep *SimpleReport) error {
 		env = "all"
 	}
 	p("# GSLB inventory: RKE1 vs RKE2 (%s)\n\n", env)
+	p("Snapshot collected: %s. This report is built entirely offline from that snapshot --\n", collectedAtSummary(rep.CollectedAt))
+	p("changes in Rancher since then (e.g. a `%s` rollout) won't show up until you re-run `collect`.\n\n", "clusterpool/legacy-cluster")
 	p("%d RKE1 hosts total — %d found in RKE2, %d missing.\n\n", len(rep.Inventory), len(rep.Found), len(rep.Missing))
 
 	p("## 1. RKE1 inventory\n\n")
