@@ -15,7 +15,8 @@
     "target": "(?i)^(?P<pool>[a-z]*?)(?P<env>np|pd)(?P<dc>270|sdc|moz)-cap-\\d+$",
     "envAliases": { "nonprod": "nonprod", "np": "nonprod", "prod": "prod", "pd": "prod", "prd": "prod" },
     "dcAliases": {},
-    "slotOverrides": { "some-oddly-named-cluster": "prod/sdc" }
+    "slotOverrides": { "some-oddly-named-cluster": "prod/sdc" },
+    "legacyAliases": { "amber": "cto-cloud", "bolt": "avaf", "cnc": "cto-shared" }
   },
   "legacyAnnotation": "clusterpool/legacy-cluster",
   "slots": ["nonprod/270", "nonprod/sdc", "prod/270", "prod/sdc"],

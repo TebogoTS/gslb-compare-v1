@@ -235,12 +235,41 @@ func TestHintMatchesBase(t *testing.T) {
 		hint, base string
 		want       bool
 	}{
-		{"corp", "cib-corp", true},                  // alias suffix match
-		{"corp, fx", "cib-fx", true},                 // comma-separated list
-		{"cib-fx-nonprod-270", "cib-fx", true},       // full legacy name in the hint
-		{"corp", "cib-fx", false},                    // no match
-		{"", "cib-corp", false},                      // empty hint
+		{"corp", "cib-corp", true},              // alias suffix match
+		{"corp, fx", "cib-fx", true},             // comma-separated list
+		{"cib-fx-nonprod-270", "cib-fx", true},   // full legacy name in the hint
+		{"corp", "cib-fx", false},                // no match
+		{"", "cib-corp", false},                  // empty hint
 		{"absaaccess", "cib-absaaccess", true},
+		{"amber", "cto-cloud", false}, // wholesale rename: unresolvable without legacyAliases
+	}
+	for _, c := range cases {
+		if got := hintMatchesBase(cfg, c.hint, c.base); got != c.want {
+			t.Errorf("hintMatchesBase(%q, %q) = %v, want %v", c.hint, c.base, got, c.want)
+		}
+	}
+}
+
+// TestHintMatchesBase_LegacyAliases covers renames with no textual relationship to the RKE1
+// base name (e.g. "amber" for "cto-cloud") -- the suffix heuristic in TestHintMatchesBase
+// can never resolve these; naming.legacyAliases is the explicit escape hatch for them.
+func TestHintMatchesBase_LegacyAliases(t *testing.T) {
+	cfg, err := loadConfig(writeTempConfig(t, `{"endpoints":[], "naming": {"legacyAliases": {
+		"amber": "cto-cloud", "bolt": "avaf", "Cnc": "cto-shared"
+	}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		hint, base string
+		want       bool
+	}{
+		{"amber", "cto-cloud", true},
+		{"AMBER", "cto-cloud", true}, // case-insensitive on both the hint and the configured key
+		{"bolt", "avaf", true},
+		{"cnc", "cto-shared", true}, // configured with a mixed-case key ("Cnc"), normalised on load
+		{"amber", "avaf", false},    // must not cross-match another alias's base
+		{"corp", "cib-corp", true},  // the suffix heuristic must still work alongside the map
 	}
 	for _, c := range cases {
 		if got := hintMatchesBase(cfg, c.hint, c.base); got != c.want {

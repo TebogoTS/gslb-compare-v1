@@ -64,6 +64,14 @@ prod`), so a partial map is safe. `resourceRef` selectors support `matchLabels` 
 `matchExpressions`; an empty `resourceRef: {}` (what the API returns for Gslbs that don't use
 it) is ignored.
 
+**`naming.legacyAliases`** — the `clusterpool/legacy-cluster` annotation is often a wholesale
+rename with no textual relationship to the RKE1 cluster (`bolt` for `avaf`, `amber` for
+`cto-cloud`). `likely_rke2_cluster` first checks this map (`{"<annotation value>": "<RKE1 base
+name>"}`, case-insensitive), then falls back to a suffix heuristic that only covers
+shortenings of the actual name (`corp` for `cib-corp`, `fx` for `cib-fx`). Aliases with no
+entry here and no textual relationship to their RKE1 base will never resolve automatically —
+that's expected, not a bug; add them here once you know them.
+
 ## Output (`--out` dir)
 
 | File | Content |
