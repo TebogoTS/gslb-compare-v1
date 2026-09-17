@@ -86,6 +86,13 @@ func (c *runCmd) Run(cfg *Config, ctx context.Context) error {
 }
 
 func main() {
+	// Built before Parse and bound via BindFor so it's registered under the
+	// context.Context *interface* type -- passing it straight to kctx.Run(cfg, ctx)
+	// instead registers it under its concrete dynamic type, which Run() methods
+	// declaring a context.Context parameter can't be matched against.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	kctx := kong.Parse(&cli,
 		kong.Name("gslb-compare"),
 		kong.Description("RKE1 vs RKE2 k8gb Gslb/Ingress inventory and comparison.\n\n"+
@@ -93,15 +100,13 @@ func main() {
 			"HTTPS_PROXY / NO_PROXY are honoured. -env scopes both sides to that env's\n"+
 			"clusters (both DCs); the default, \"nonprod\", covers nonprod/270 + nonprod/sdc."),
 		kong.UsageOnError(),
+		kong.BindFor[context.Context](ctx),
 	)
 
 	cfg, err := loadConfig(cli.Config)
 	kctx.FatalIfErrorf(err)
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	err = kctx.Run(cfg, ctx)
+	err = kctx.Run(cfg)
 	kctx.FatalIfErrorf(err)
 }
 

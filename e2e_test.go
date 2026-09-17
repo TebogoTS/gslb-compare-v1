@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -245,6 +246,97 @@ func TestHintMatchesBase(t *testing.T) {
 		if got := hintMatchesBase(cfg, c.hint, c.base); got != c.want {
 			t.Errorf("hintMatchesBase(%q, %q) = %v, want %v", c.hint, c.base, got, c.want)
 		}
+	}
+}
+
+// TestCLIBinaryEndToEnd builds the real binary and drives it as a subprocess through
+// every command, via its actual Kong-parsed flags. Unlike the tests above -- which call
+// buildSimpleReport/runCollect/etc. directly and so never touch main()'s flag parsing or
+// dependency wiring -- this is what would have caught the "couldn't find binding of type
+// context.Context" failure: Kong resolved fine, the *Config binding worked, but ctx (passed
+// as a concrete value rather than via kong.BindFor[context.Context]) registered under its
+// dynamic type instead of the context.Context interface, so no Run() method taking a
+// context.Context could be matched. Exercise the CLI itself, not just the logic behind it.
+func TestCLIBinaryEndToEnd(t *testing.T) {
+	legacy := &fakeRancher{
+		clusters: []map[string]any{cl("c-1", "cib-corp-nonprod-270")},
+		objs: map[string][]map[string]any{
+			"c-1" + gp: {gslbEmbedded("shop", "web", "web.np.absa.africa", "roundRobin")},
+			"c-1" + ip: {ing("shop", "web", "web.np.absa.africa", "web", 8080, owner("web"))},
+		},
+	}
+	target := &fakeRancher{
+		clusters: []map[string]any{cl("c-m-1", "adonp270-cap-1")},
+		objs: map[string][]map[string]any{
+			"c-m-1" + gp: {gslbEmbedded("shop", "web", "web.np.absa.africa", "roundRobin")},
+			"c-m-1" + ip: {ing("shop", "web", "web.np.absa.africa", "web", 8080, owner("web"))},
+		},
+	}
+	s1, s2 := httptest.NewServer(legacy), httptest.NewServer(target)
+	defer s1.Close()
+	defer s2.Close()
+	t.Setenv("RANCHER_RKE1_TOKEN", "tok")
+	t.Setenv("RANCHER_MGMT1_TOKEN", "tok")
+
+	dir := t.TempDir()
+	cp := filepath.Join(dir, "config.json")
+	cfgJSON := `{"endpoints":[
+	  {"name":"rke1","role":"legacy","url":"` + s1.URL + `","tokenEnv":"RANCHER_RKE1_TOKEN"},
+	  {"name":"rke2-mgmt-1","role":"target","url":"` + s2.URL + `","tokenEnv":"RANCHER_MGMT1_TOKEN"}]}`
+	if err := os.WriteFile(cp, []byte(cfgJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	bin := filepath.Join(dir, "gslb-compare")
+	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
+		t.Fatalf("go build: %v\n%s", err, out)
+	}
+
+	run := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command(bin, args...)
+		cmd.Dir = dir
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("gslb-compare %v: %v\n%s", args, err, out)
+		}
+		return string(out)
+	}
+
+	if out := run("clusters", "--config", cp); !strings.Contains(out, "adonp270-cap-1") {
+		t.Errorf("clusters output missing expected cluster:\n%s", out)
+	}
+	run("collect", "--config", cp, "--snapshot", "snap.json")
+	if _, err := os.Stat(filepath.Join(dir, "snap.json")); err != nil {
+		t.Errorf("collect should have written snap.json: %v", err)
+	}
+	run("report", "--config", cp, "--snapshot", "snap.json", "--out", "report", "--env", "nonprod")
+	for _, f := range []string{"report.md", "rke1-inventory.csv", "found-in-rke2.csv", "missing-in-rke2.csv"} {
+		if _, err := os.Stat(filepath.Join(dir, "report", f)); err != nil {
+			t.Errorf("report should have written %s: %v", f, err)
+		}
+	}
+	found := readCSV(t, filepath.Join(dir, "report", "found-in-rke2.csv"))
+	if r := findRow(found, "host", "web.np.absa.africa"); r["found_on_rke2"] != "adonp270-cap-1" {
+		t.Errorf("expected web.np.absa.africa found on adonp270-cap-1, got: %v", r)
+	}
+
+	run("run", "--config", cp, "--out", "report2", "--env", "nonprod")
+	if _, err := os.Stat(filepath.Join(dir, "report2", "snapshot.json")); err != nil {
+		t.Errorf("run should have written report2/snapshot.json: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "report2", "report.md")); err != nil {
+		t.Errorf("run should have written report2/report.md: %v", err)
+	}
+
+	// The short-flag form (-c) and the double-dash form must both work; a single-dash
+	// long flag (-config) must not (that's Kong's parsing convention, worth pinning down
+	// so a future flag-library swap doesn't silently change this again).
+	run("clusters", "-c", cp)
+	cmd := exec.Command(bin, "clusters", "-config", cp)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err == nil {
+		t.Errorf("expected -config (single-dash long flag) to be rejected, got:\n%s", out)
 	}
 }
 
