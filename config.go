@@ -30,6 +30,10 @@ type Naming struct {
 	DCAliases  map[string]string `json:"dcAliases"`
 	// Escape hatch: cluster display name -> "env/dc"
 	SlotOverrides map[string]string `json:"slotOverrides"`
+	// Escape hatch: clusterpool/legacy-cluster annotation value -> RKE1 base name, for
+	// renames with no textual relationship to the RKE1 name (e.g. "bolt" -> "avaf").
+	// hintMatchesBase checks this before falling back to its suffix heuristic.
+	LegacyAliases map[string]string `json:"legacyAliases"`
 }
 
 type HostRewrite struct {
@@ -88,6 +92,11 @@ func loadConfig(path string) (*Config, error) {
 		dc[strings.ToLower(k)] = strings.ToLower(v)
 	}
 	c.Naming.DCAliases = dc
+	legacyAliases := map[string]string{}
+	for k, v := range c.Naming.LegacyAliases {
+		legacyAliases[strings.ToLower(k)] = strings.ToLower(v)
+	}
+	c.Naming.LegacyAliases = legacyAliases
 	if c.LegacyAnnotation == "" {
 		c.LegacyAnnotation = "clusterpool/legacy-cluster"
 	}

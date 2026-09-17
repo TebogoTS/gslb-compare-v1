@@ -68,13 +68,18 @@ type targetHit struct {
 }
 
 // hintMatchesBase reports whether the clusterpool/legacy-cluster annotation value(s) in hint
-// refer to base (an RKE1 cluster's parsed base name, e.g. "cib-fx"). Tolerates the hint
-// dropping the prefix and/or the -<env>-<dc> suffix, and comma/space separated lists.
+// refer to base (an RKE1 cluster's parsed base name, e.g. "cib-fx"). Checks
+// naming.legacyAliases first (for renames with no textual relationship to base, e.g. "bolt"
+// for "avaf"), then falls back to a suffix heuristic that tolerates the hint dropping the
+// prefix and/or the -<env>-<dc> suffix. Comma/space separated lists in hint are all checked.
 func hintMatchesBase(cfg *Config, hint, base string) bool {
 	if hint == "" || base == "" {
 		return false
 	}
 	for _, h := range strings.FieldsFunc(strings.ToLower(hint), func(r rune) bool { return r == ',' || r == ' ' }) {
+		if cfg.Naming.LegacyAliases[h] == base {
+			return true
+		}
 		if h == base || strings.HasSuffix(base, "-"+h) {
 			return true
 		}
