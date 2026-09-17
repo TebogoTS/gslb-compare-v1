@@ -1,0 +1,27 @@
+{
+  "endpoints": [
+    { "name": "rke1",        "role": "legacy", "url": "https://rancher-rke1.example.absa.africa",  "tokenEnv": "RANCHER_RKE1_TOKEN", "caFile": "/etc/ssl/certs/netskope-ca.pem" },
+    { "name": "rke2-mgmt-1", "role": "target", "url": "https://rancher-mgmt-1.example.absa.africa", "tokenEnv": "RANCHER_MGMT1_TOKEN",
+      "slot": "nonprod/270" },
+    { "name": "rke2-mgmt-2", "role": "target", "url": "https://rancher-mgmt-2.example.absa.africa", "tokenEnv": "RANCHER_MGMT2_TOKEN" },
+    { "name": "rke2-mgmt-3", "role": "target", "url": "https://rancher-mgmt-3.example.absa.africa", "tokenEnv": "RANCHER_MGMT3_TOKEN" },
+    { "name": "rke2-mgmt-4", "role": "target", "url": "https://rancher-mgmt-4.example.absa.africa", "tokenEnv": "RANCHER_MGMT4_TOKEN" },
+    { "name": "rke2-mgmt-5", "role": "target", "url": "https://rancher-mgmt-5.example.absa.africa", "tokenEnv": "RANCHER_MGMT5_TOKEN" },
+    { "name": "rke2-mgmt-6", "role": "target", "url": "https://rancher-mgmt-6.example.absa.africa", "tokenEnv": "RANCHER_MGMT6_TOKEN",
+      "clusterExclude": "^(sandbox|lab)-" }
+  ],
+  "naming": {
+    "legacy": "(?i)^(?P<base>.+?)-(?P<env>nonprod|non-prod|np|prod|prd|pd)-(?P<dc>270|sdc)$",
+    "target": "(?i)^(?P<pool>[a-z]*?)(?P<env>np|pd)(?P<dc>270|sdc|moz)-cap-\\d+$",
+    "envAliases": { "nonprod": "nonprod", "np": "nonprod", "prod": "prod", "pd": "prod", "prd": "prod" },
+    "dcAliases": {},
+    "slotOverrides": { "some-oddly-named-cluster": "prod/sdc" }
+  },
+  "legacyAnnotation": "clusterpool/legacy-cluster",
+  "slots": ["nonprod/270", "nonprod/sdc", "prod/270", "prod/sdc"],
+  "ignoreFields": [],
+  "hostRewrites": [],
+  "workers": 10,
+  "timeoutSeconds": 120,
+  "allStates": false
+}
